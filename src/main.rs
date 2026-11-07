@@ -1,4 +1,3 @@
-use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ EventLoop};
 use winit::window::{Window, WindowBuilder};
@@ -18,6 +17,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
 
     frame: u32,
+
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
@@ -70,7 +71,58 @@ impl State {
 
         surface.configure(&device, &config);
 
-        State{window, surface, device, queue, config, size, frame: 0}
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor{
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
+            label: Some("Pipeline layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor{
+            label: Some("Render Pipeline"),
+            layout: Some(&pipeline_layout),
+
+            vertex: wgpu::VertexState{
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+
+            fragment: Some(wgpu::FragmentState{
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState{
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState{
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState{
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        State{window, surface, device, queue, config, size, frame: 0, render_pipeline}
     }
 
     fn window(&self) -> &Window {
@@ -101,7 +153,7 @@ impl State {
         });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
+            let mut _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
                 label: Some("Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment{
                     view: &view,
@@ -120,6 +172,9 @@ impl State {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            _render_pass.set_pipeline(&self.render_pipeline);
+            _render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
