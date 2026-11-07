@@ -16,6 +16,8 @@ struct State {
     config: wgpu::SurfaceConfiguration,
 
     size: winit::dpi::PhysicalSize<u32>,
+
+    frame: u32,
 }
 
 impl State {
@@ -68,7 +70,7 @@ impl State {
 
         surface.configure(&device, &config);
 
-        State{window, surface, device, queue, config, size}
+        State{window, surface, device, queue, config, size, frame: 0}
     }
 
     fn window(&self) -> &Window {
@@ -83,6 +85,48 @@ impl State {
 
             self.surface.configure(&self.device, &self.config);
         }
+    }
+
+    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+
+        self.frame += 1;
+        let t = (self.frame as f64 * 0.02).sin() * 0.5 + 0.5;
+
+        let output = self.surface.get_current_texture()?;
+
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
+            label: Some("Render Encoder"),
+        });
+
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment{
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: t * 0.10,
+                            b: 0.25 + t * 0.4,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        output.present();
+
+        Ok(())
     }
 }
 
@@ -108,6 +152,20 @@ fn main() {
                         WindowEvent::CloseRequested => control_flow.exit(),
                         WindowEvent::Resized(size) => {
                             state.resize(*size);
+                        }
+                        WindowEvent::RedrawRequested => {
+                            state.window().request_redraw();
+                            match state.render() {
+                                Ok(_) => {}
+                                Err(wgpu::SurfaceError::Lost) => {
+                                    let size = state.size;
+                                    state.resize(size);
+                                }
+                                Err(wgpu::SurfaceError::OutOfMemory) => {
+                                    control_flow.exit()
+                                }
+                                Err(e) => eprintln!("{:?}", e),
+                            }
                         }
                         _ => {}
                     }
