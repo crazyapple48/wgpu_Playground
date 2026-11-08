@@ -1,9 +1,5 @@
-fn main() {
-    // enable wgpu logger
-    env_logger::init();
+use playground::run;
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..Default::default()
-    });
+fn main() {
+    run().unwrap();
 }
