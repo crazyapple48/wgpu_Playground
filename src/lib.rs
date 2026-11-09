@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use wgpu::PresentMode;
 use winit::application::ApplicationHandler;
 use winit::event::{WindowEvent, KeyEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -85,13 +84,90 @@ impl State {
     }
 
     pub fn resize(&mut self, _width: u32, _height: u32){
-        //TODO: Do stuff here
+        if _width > 0 && _height > 0 {
+            // Max dimension in WebGL is 2048px. I think if we are doing a native build,
+            // we don't need this size cap.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let max = 2048;
+                self.config.width = _width.min(max);
+                self.config.height = _height.min(max);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.config.width = _width;
+                self.config.height = _height;
+            }
+            self.surface.configure(&self.device, &self.config);
+            self.is_surface_configured = true;
+        }
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self) -> anyhow::Result<()> {
         self.window.request_redraw();
 
-        //TODO: Do stuff here
+        if !self.is_surface_configured {
+            return Ok(());
+        }
+
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => return Ok(()),
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Lost => anyhow::bail!("Lost device")
+        };
+
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
+
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+        }
+        
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.present(output);
+        
+        Ok(())
+    }
+
+    fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        match (code, is_pressed) {
+            (KeyCode::Escape, true) => event_loop.exit(),
+            _ => {}
+        }
+    }
+    
+    fn update(&mut self) {
+        //TODO: Finish this
     }
 }
 
@@ -187,7 +263,14 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                state.render();
+                state.update();
+                match state.render() {
+                    Ok(_) => {},
+                    Err(e) => {
+                        log::error!("Unable to render window: {}", e);
+                        event_loop.exit();
+                    }
+                }
             }
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
@@ -196,10 +279,7 @@ impl ApplicationHandler<State> for App {
                     ..
                 },
                 ..
-            } => match (code, key_state.is_pressed()) {
-                (KeyCode::Escape, true) => event_loop.exit(),
-                _ => {}
-            },
+            } => state.handle_key(event_loop, code, key_state.is_pressed()),
             _ => {}
         }
     }
@@ -238,10 +318,4 @@ pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
     run().unwrap_throw();
 
     Ok(())
-}
-
-fn main() {
-    // enable wgpu logger
-    env_logger::init();
-
 }

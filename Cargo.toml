@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "playground"
+name = "playground-bin"
 path = "src/main.rs"
 
 # if WASM struggles to build, get rid of this
