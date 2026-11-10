@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalPosition;
 use winit::event::{WindowEvent, KeyEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -19,7 +20,11 @@ pub struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
-    window: Arc<Window>
+    window: Arc<Window>,
+
+    red: f64,
+    green: f64,
+    blue: f64,
 }
 
 impl State {
@@ -80,7 +85,7 @@ impl State {
 
         
 
-        Ok(Self {surface, device, queue, config, is_surface_configured: false, window})
+        Ok(Self {surface, device, queue, config, is_surface_configured: false, window, red: 0.1, green: 0.2, blue: 0.3})
     }
 
     pub fn resize(&mut self, _width: u32, _height: u32){
@@ -138,9 +143,9 @@ impl State {
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: self.red,
+                            g: self.green,
+                            b: self.blue,
                             a: 1.0
                         }),
                         store: wgpu::StoreOp::Store,
@@ -280,6 +285,16 @@ impl ApplicationHandler<State> for App {
                 },
                 ..
             } => state.handle_key(event_loop, code, key_state.is_pressed()),
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                state.red = position.x / (state.window.inner_size().width as f64);
+                state.blue = 0.0;
+                state.green = 0.9;
+                
+                state.window.request_redraw();
+            },
             _ => {}
         }
     }
