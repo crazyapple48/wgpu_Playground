@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalPosition;
-use winit::event::{WindowEvent, KeyEvent};
+use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -12,8 +11,6 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::WindowExtWebSys;
 
-
-
 pub struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -22,13 +19,11 @@ pub struct State {
     is_surface_configured: bool,
     window: Arc<Window>,
 
-    red: f64,
-    green: f64,
-    blue: f64,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
-    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self>{
+    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -44,29 +39,35 @@ impl State {
 
         let surface = instance.create_surface(window.clone())?;
 
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: true,
-        }).await?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: true,
+            })
+            .await?;
 
-        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-            label: None,
-            required_features: wgpu::Features::empty(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            required_limits: if cfg!(target_arch = "wasm32") {
-                wgpu::Limits::downlevel_webgl2_defaults()
-            } else {
-                wgpu::Limits::default()
-            },
-            memory_hints: Default::default(),
-            trace: wgpu::Trace::Off,
-        }).await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::default()
+                },
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
+            .await?;
 
         let surface_caps = surface.get_capabilities(&adapter);
 
-        let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps
+            .formats
+            .iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
@@ -83,12 +84,68 @@ impl State {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
-        
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
 
-        Ok(Self {surface, device, queue, config, is_surface_configured: false, window, red: 0.1, green: 0.2, blue: 0.3})
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::all(),
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Ok(Self {
+            surface,
+            device,
+            queue,
+            config,
+            is_surface_configured: false,
+            render_pipeline,
+            window,
+        })
     }
 
-    pub fn resize(&mut self, _width: u32, _height: u32){
+    pub fn resize(&mut self, _width: u32, _height: u32) {
         if _width > 0 && _height > 0 {
             // Max dimension in WebGL is 2048px. I think if we are doing a native build,
             // we don't need this size cap.
@@ -125,17 +182,21 @@ impl State {
                 self.surface.configure(&self.device, &self.config);
                 return Ok(());
             }
-            wgpu::CurrentSurfaceTexture::Lost => anyhow::bail!("Lost device")
+            wgpu::CurrentSurfaceTexture::Lost => anyhow::bail!("Lost device"),
         };
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -143,10 +204,10 @@ impl State {
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: self.red,
-                            g: self.green,
-                            b: self.blue,
-                            a: 1.0
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -156,11 +217,14 @@ impl State {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
-        
+
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
-        
+
         Ok(())
     }
 
@@ -170,7 +234,7 @@ impl State {
             _ => {}
         }
     }
-    
+
     fn update(&mut self) {
         //TODO: Finish this
     }
@@ -183,7 +247,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self{
+    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
 
@@ -204,7 +268,6 @@ impl ApplicationHandler<State> for App {
         {
             use wasm_bindgen::JsCast;
             use winit::platform::web::WindowAttributesExtWebSys;
-
 
             const CANVAS_ID: &str = "canvas";
 
@@ -229,13 +292,15 @@ impl ApplicationHandler<State> for App {
 
             if let Some(proxy) = self.proxy.take() {
                 wasm_bindgen_futures::spawn_local(async move {
-                    assert!(proxy
-                        .send_event(
-                            State::new(window)
-                                .await
-                                .expect("Unable to create canvas!!!")
-                        )
-                        .is_ok());
+                    assert!(
+                        proxy
+                            .send_event(
+                                State::new(window)
+                                    .await
+                                    .expect("Unable to create canvas!!!")
+                            )
+                            .is_ok()
+                    );
                 })
             }
         }
@@ -244,7 +309,6 @@ impl ApplicationHandler<State> for App {
     #[allow(unused_mut)]
     #[allow(unused_variables)]
     fn user_event(&mut self, event_loop: &ActiveEventLoop, mut event: State) {
-
         // This is where proxy.send_event() ends up
         #[cfg(target_arch = "wasm32")]
         {
@@ -258,7 +322,12 @@ impl ApplicationHandler<State> for App {
     }
 
     #[allow(unused_variables)]
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         let state = match &mut self.state {
             Some(canvas) => canvas,
             None => return,
@@ -270,7 +339,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::RedrawRequested => {
                 state.update();
                 match state.render() {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         log::error!("Unable to render window: {}", e);
                         event_loop.exit();
@@ -278,27 +347,17 @@ impl ApplicationHandler<State> for App {
                 }
             }
             WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    physical_key: PhysicalKey::Code(code),
-                    state: key_state,
-                    ..
-                },
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state: key_state,
+                        ..
+                    },
                 ..
             } => state.handle_key(event_loop, code, key_state.is_pressed()),
-            WindowEvent::CursorMoved {
-                device_id,
-                position,
-            } => {
-                state.red = position.x / (state.window.inner_size().width as f64);
-                state.blue = 0.0;
-                state.green = 0.9;
-                
-                state.window.request_redraw();
-            },
             _ => {}
         }
     }
-
 }
 pub fn run() -> anyhow::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
